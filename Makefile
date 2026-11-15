@@ -14,15 +14,14 @@ bin/proc_sensor: src/proc_sensor.c
 
 bin/sysmond: src/sysmond.c
 	$(CC) $(CFLAGS) $< -o $@
+
 run: all
-	mkdir -p /tmp/sysmon
-	./bin/mem_sensor & \
-	./bin/cpu_sensor & \
-	./bin/proc_sensor & \
 	./bin/sysmond
+
 clean:
 	rm -f bin/mem_sensor bin/cpu_sensor bin/proc_sensor bin/sysmond
+
 kill:
-	-killall mem_sensor cpu_sensor proc_sensor sysmond
+	-killall sysmond
 
 .PHONY: all clean run kill
