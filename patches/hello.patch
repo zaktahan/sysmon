@@ -1,0 +1,41 @@
+--- a/drivers/misc/Makefile
++++ b/drivers/misc/Makefile
+@@ -75,3 +75,4 @@
+ obj-$(CONFIG_NSM)		+= nsm.o
+ obj-$(CONFIG_MARVELL_CN10K_DPI)	+= mrvl_cn10k_dpi.o
+ obj-y				+= keba/
++obj-$(CONFIG_HELLO_TRAINING) += hello.o
+--- a/drivers/misc/Kconfig
++++ b/drivers/misc/Kconfig
+@@ -654,4 +654,9 @@
+ source "drivers/misc/pvpanic/Kconfig"
+ source "drivers/misc/mchp_pci1xxxx/Kconfig"
+ source "drivers/misc/keba/Kconfig"
++config HELLO_TRAINING
++    tristate "My Hello Kernel Module"
++    default n
++    help
++      A simple Hello World kernel module.
+ endmenu
+--- /dev/null
++++ b/drivers/misc/hello.c
+@@ -0,0 +1,19 @@
++#include <linux/init.h>
++#include <linux/module.h>
++#include <linux/kernel.h>
++
++static int __init mymod_init(void)
++{
++    printk("Hello World\n");
++    return 0;
++}
++
++static void __exit mymod_exit(void)
++{
++    printk("Bye Bye World\n");
++}
++
++module_init(mymod_init);
++module_exit(mymod_exit);
++
++MODULE_LICENSE("GPL");
