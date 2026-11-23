@@ -1,27 +1,33 @@
+
 CC = gcc
-CFLAGS = -Wall -g
+CFLAGS = -Wall -Wextra -g -Iinc
 
-all: bin/mem_sensor bin/cpu_sensor bin/proc_sensor bin/sysmond
+SRC = src
+BIN = bin
 
-bin/mem_sensor: src/mem_sensor.c
-	$(CC) $(CFLAGS) $< -o $@
+TARGETS = $(BIN)/sysmond $(BIN)/mem_sensor $(BIN)/cpu_sensor $(BIN)/proc_sensor
 
-bin/cpu_sensor: src/cpu_sensor.c
-	$(CC) $(CFLAGS) $< -o $@
+all: $(TARGETS)
 
-bin/proc_sensor: src/proc_sensor.c
-	$(CC) $(CFLAGS) $< -o $@
+$(BIN):
+	mkdir -p $(BIN)
 
-bin/sysmond: src/sysmond.c
-	$(CC) $(CFLAGS) $< -o $@
+$(BIN)/sysmond: $(SRC)/sysmond.c inc/sysmon_ipc.h | $(BIN)
+	$(CC) $(CFLAGS) -o $@ $<
+
+$(BIN)/mem_sensor: $(SRC)/mem_sensor.c inc/sysmon_ipc.h | $(BIN)
+	$(CC) $(CFLAGS) -o $@ $<
+
+$(BIN)/cpu_sensor: $(SRC)/cpu_sensor.c inc/sysmon_ipc.h | $(BIN)
+	$(CC) $(CFLAGS) -o $@ $<
+
+$(BIN)/proc_sensor: $(SRC)/proc_sensor.c inc/sysmon_ipc.h | $(BIN)
+	$(CC) $(CFLAGS) -o $@ $<
 
 run: all
-	./bin/sysmond
+	./$(BIN)/sysmond
 
 clean:
-	rm -f bin/mem_sensor bin/cpu_sensor bin/proc_sensor bin/sysmond
+	rm -rf $(BIN)
 
-kill:
-	-killall sysmond
-
-.PHONY: all clean run kill
+.PHONY: all run clean

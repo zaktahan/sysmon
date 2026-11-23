@@ -1,43 +1,108 @@
 #include <stdio.h>
-#include <unistd.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <errno.h>
+#include <sysmon_ipc.h>
 
-int main(void)
+int main(int argc, char *argv[])
 {
-while(1)
-{
-    FILE *fp = fopen("/proc/meminfo", "r");
-    if (fp == NULL)
-    {
-        perror("fopen");
-        return 1;
-    }
-
-    FILE *output = fopen("/tmp/sysmon/mem.dat", "w");
-    if (output == NULL)
-    {
-        perror("fopen");
-        fclose(fp);
-        return 1;
-    }
-
     char line[256];
+    long value;
 
-    while (fgets(line, sizeof(line), fp) != NULL)
+    int fd = STDOUT_FILENO;
+
+    // Get target file descriptor
+    if (argc > 1)
     {
-        if (strstr(line, "MemTotal:") != NULL ||
-            strstr(line, "MemAvailable:") != NULL ||
-            strstr(line, "MemFree:") != NULL ||
-            strstr(line, "SwapTotal:") != NULL ||
-            strstr(line, "SwapFree:") != NULL)
-        {
-            fwrite(line, 1, strlen(line), output);
-        }
+        fd = atoi(argv[1]);
     }
 
-    fclose(fp);
-    fclose(output);
-sleep(5);
-}
+    while (1)
+    {
+        MemData mem_data = {0};
+
+        FILE *fp = fopen("/proc/meminfo", "r");
+
+        if (fp == NULL)
+        {
+            perror("fopen");
+            return 1;
+        }
+
+        // Read memory information
+        while (fgets(line, sizeof(line), fp) != NULL)
+        {
+            if (strstr(line, "MemTotal:") != NULL)
+            {
+                if (sscanf(line, "MemTotal: %ld", &value) == 1)
+                {
+                    mem_data.mem_total = value;
+                }
+            }
+            else if (strstr(line, "MemAvailable:") != NULL)
+            {
+                if (sscanf(line, "MemAvailable: %ld", &value) == 1)
+                {
+                    mem_data.mem_avail = value;
+                }
+            }
+            else if (strstr(line, "MemFree:") != NULL)
+            {
+                if (sscanf(line, "MemFree: %ld", &value) == 1)
+                {
+                    mem_data.mem_free = value;
+                }
+            }
+            else if (strstr(line, "SwapTotal:") != NULL)
+            {
+                if (sscanf(line, "SwapTotal: %ld", &value) == 1)
+                {
+                    mem_data.swap_total = value;
+                }
+            }
+            else if (strstr(line, "SwapFree:") != NULL)
+            {
+                if (sscanf(line, "SwapFree: %ld", &value) == 1)
+                {
+                    mem_data.swap_free = value;
+                }
+            }
+        }
+
+        fclose(fp);
+
+        // Send the entire binary structure
+        size_t total = 0;
+
+        while (total < sizeof(mem_data))
+        {
+            ssize_t written = write(
+                fd,
+                (const char *)&mem_data + total,
+                sizeof(mem_data) - total
+            );
+
+            if (written < 0)
+            {
+                if (errno == EINTR)
+                    continue;
+
+                perror("write");
+                return 1;
+            }
+
+            if (written == 0)
+            {
+                fprintf(stderr, "write: no progress\n");
+                return 1;
+            }
+
+            total += written;
+        }
+
+        sleep(1);
+    }
+
     return 0;
 }

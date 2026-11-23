@@ -1,57 +1,83 @@
+
 #include <sys/types.h>
 #include <dirent.h>
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <sysmon_ipc.h>
 
 int main(void)
 {
-while(1)
-{
-    int counter = 0;
+    ProcData procdata = {0};
 
-    DIR *dir = opendir("/proc");
+    int fd = open(PROC_FIFO_PATH, O_WRONLY);
 
-    if (dir == NULL)
+    if (fd < 0)
     {
-        perror("opendir");
-        return 1;
-    }
-	FILE *output = fopen("/tmp/sysmon/proc.dat", "w");
-if (output == NULL)
-    {
-     	perror("openfile");
+        perror("open FIFO");
         return 1;
     }
 
-    struct dirent *entry;
-
-    while ((entry = readdir(dir)) != NULL)
+    while (1)
     {
-        int len = strlen(entry->d_name);
-        int flag = 1;
+        int counter = 0;
 
-        for (int i = 0; i < len; i++)
+        DIR *dir = opendir("/proc");
+
+        if (dir == NULL)
         {
-            if (!isdigit((unsigned char)entry->d_name[i]))
+            perror("opendir");
+            close(fd);
+            return 1;
+        }
+
+        struct dirent *entry;
+
+        while ((entry = readdir(dir)) != NULL)
+        {
+            int len = strlen(entry->d_name);
+            int flag = 1;
+
+            for (int i = 0; i < len; i++)
             {
-                flag = 0;
-                break;
+                if (!isdigit((unsigned char)entry->d_name[i]))
+                {
+                    flag = 0;
+                    break;
+                }
+            }
+
+            if (flag == 1)
+            {
+                counter++;
             }
         }
 
-        if (flag == 1)
+        closedir(dir);
+
+        procdata.total_procs = counter;
+
+        ssize_t written = write(fd, &procdata, sizeof(procdata));
+
+        if (written < 0)
         {
-            counter++;
+            perror("write");
+            close(fd);
+            return 1;
         }
+
+        if ((size_t)written != sizeof(procdata))
+        {
+            fprintf(stderr, "Incomplete write\n");
+            close(fd);
+            return 1;
+        }
+
+        sleep(1);
     }
 
-    closedir(dir);
-
-    fprintf(output,"Number of processes: %d\n", counter);
-	fclose(output);
-sleep(5);
-}
+    close(fd);
     return 0;
 }
