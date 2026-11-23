@@ -1,118 +1,209 @@
+
 #include <stdio.h>
 #include <unistd.h>
-#include<errno.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <signal.h>
+#include <sysmon_ipc.h>
+
+volatile sig_atomic_t stop = 0;
+
+void handler(int sig)
+{
+    (void)sig;
+    stop = 1;
+}
+
 int main(void)
 {
-pid_t pid1 = fork();
+    struct sigaction sa = {0};
 
-if (pid1 < 0)
-{
-    perror("fork");
-    return 1;
-}
+    sa.sa_handler = handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
 
-if (pid1 == 0)
-{
-    execl("./bin/mem_sensor", "mem_sensor", (char *)NULL);
-    perror("execl");
-    _exit(1);
-}
-
-pid_t pid2 = fork();
-
-    if (pid2 == 0)
+    if (sigaction(SIGINT, &sa, NULL) == -1 ||
+        sigaction(SIGTERM, &sa, NULL) == -1)
     {
-        execl("./bin/cpu_sensor", "cpu_sensor", (char *)NULL);
-        perror("execl");
+        perror("sigaction");
+        return 1;
+    }
+
+    int pipefd[2];
+
+    if (pipe(pipefd) == -1)
+    {
+        perror("pipe");
+        return 1;
+    }
+
+    pid_t pid1 = fork();
+
+    if (pid1 < 0)
+    {
+        perror("fork");
+        return 1;
+    }
+
+    if (pid1 == 0)
+    {
+        close(pipefd[0]);
+
+        char fd_str[20];
+        snprintf(fd_str, sizeof(fd_str), "%d", pipefd[1]);
+
+        char *args[] = {"./bin/mem_sensor", fd_str, NULL};
+
+        execve("./bin/mem_sensor", args, NULL);
+
+        perror("execve");
         _exit(1);
     }
+
+    close(pipefd[1]);
+
+    if (mkfifo(CPU_FIFO_PATH, 0666) == -1 && errno != EEXIST)
+    {
+        perror("mkfifo cpu");
+        return 1;
+    }
+
+    if (mkfifo(PROC_FIFO_PATH, 0666) == -1 && errno != EEXIST)
+    {
+        perror("mkfifo proc");
+        return 1;
+    }
+
+    pid_t pid2 = fork();
+
     if (pid2 < 0)
     {
         perror("fork");
         return 1;
     }
 
-pid_t pid3 = fork();
-
-    if (pid3 == 0)
+    if (pid2 == 0)
     {
-        execl("./bin/proc_sensor", "proc_sensor", (char *)NULL);
-        perror("execl");
+        close(pipefd[0]);
+
+        char *args[] = {"./bin/cpu_sensor", NULL};
+
+        execve("./bin/cpu_sensor", args, NULL);
+
+        perror("execve");
         _exit(1);
     }
+
+    pid_t pid3 = fork();
+
     if (pid3 < 0)
     {
         perror("fork");
         return 1;
     }
 
-if (mkdir("/tmp/sysmon", 0755) == -1 && errno != EEXIST)
-{
-    perror("mkdir");
-    return 1;
-}
-
-while(1)
-{
-
-    FILE *sensor = fopen("/tmp/sysmon/proc.dat", "r");
-    if (sensor == NULL)
+    if (pid3 == 0)
     {
-        perror("fopen");
+        close(pipefd[0]);
+
+        char *args[] = {"./bin/proc_sensor", NULL};
+
+        execve("./bin/proc_sensor", args, NULL);
+
+        perror("execve");
+        _exit(1);
+    }
+
+    int cpu_fd = open(CPU_FIFO_PATH, O_RDONLY);
+
+    if (cpu_fd < 0)
+    {
+        perror("open cpu FIFO");
         return 1;
     }
 
-    FILE *cpu = fopen("/tmp/sysmon/cpu.dat", "r");
-    if (cpu == NULL)
+    int proc_fd = open(PROC_FIFO_PATH, O_RDONLY);
+
+    if (proc_fd < 0)
     {
-        perror("fopen");
-        fclose(sensor);
+        perror("open proc FIFO");
+        close(cpu_fd);
         return 1;
     }
 
-    FILE *mem = fopen("/tmp/sysmon/mem.dat", "r");
-    if (mem == NULL)
+    MemData mem_data;
+    CpuData cpu_data;
+    ProcData proc_data;
+
+    while (!stop)
     {
-        perror("fopen");
-        fclose(cpu);
-        fclose(sensor);
-        return 1;
+        if (read(pipefd[0], &mem_data, sizeof(mem_data)) != sizeof(mem_data))
+        {
+            if (!stop)
+                fprintf(stderr, "Failed to read memory data\n");
+            break;
+        }
+
+        if (stop)
+            break;
+
+        if (read(cpu_fd, &cpu_data, sizeof(cpu_data)) != sizeof(cpu_data))
+        {
+            if (!stop)
+                fprintf(stderr, "Failed to read CPU data\n");
+            break;
+        }
+
+        if (stop)
+            break;
+
+        if (read(proc_fd, &proc_data, sizeof(proc_data)) != sizeof(proc_data))
+        {
+            if (!stop)
+                fprintf(stderr, "Failed to read process data\n");
+            break;
+        }
+
+        if (stop)
+            break;
+
+        printf("\n===== MEMORY =====\n");
+        printf("Total: %ld kB\n", mem_data.mem_total);
+        printf("Available: %ld kB\n", mem_data.mem_avail);
+        printf("Free: %ld kB\n", mem_data.mem_free);
+        printf("Swap Total: %ld kB\n", mem_data.swap_total);
+        printf("Swap Free: %ld kB\n", mem_data.swap_free);
+
+        printf("\n===== CPU =====\n");
+        printf("Load 1: %f\n", cpu_data.load1);
+        printf("Load 5: %f\n", cpu_data.load5);
+        printf("Load 15: %f\n", cpu_data.load15);
+
+        printf("\n===== PROCESSES =====\n");
+        printf("Total Processes: %d\n", proc_data.total_procs);
+
+        sleep(1);
     }
 
-    char line[256];
+    kill(pid1, SIGTERM);
+    kill(pid2, SIGTERM);
+    kill(pid3, SIGTERM);
 
-    printf("===== MEMORY =====\n");
+    waitpid(pid1, NULL, 0);
+    waitpid(pid2, NULL, 0);
+    waitpid(pid3, NULL, 0);
 
-    while (fgets(line, sizeof(line), mem) != NULL)
-    {
-        printf("%s", line);
-    }
+    close(pipefd[0]);
+    close(cpu_fd);
+    close(proc_fd);
 
-    printf("\n===== CPU =====\n");
+    unlink(CPU_FIFO_PATH);
+    unlink(PROC_FIFO_PATH);
 
-    while (fgets(line, sizeof(line), cpu) != NULL)
-    {
-        printf("%s", line);
-    }
-
-    printf("\n===== PROCESSES =====\n");
-
-    while (fgets(line, sizeof(line), sensor) != NULL)
-    {
-        printf("%s", line);
-    }
-	sleep(5);
-    fclose(cpu);
-    fclose(sensor);
-    fclose(mem);
-}
-waitpid(pid1, NULL, 0);
-waitpid(pid2, NULL, 0);
-waitpid(pid3, NULL, 0);
+    printf("\nSysmon stopped successfully\n");
 
     return 0;
 }
