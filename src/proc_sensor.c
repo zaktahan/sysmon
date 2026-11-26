@@ -75,7 +75,7 @@ int main(void)
             return 1;
         }
 
-        sleep(1);
+        sleep(5);
     }
 
     close(fd);

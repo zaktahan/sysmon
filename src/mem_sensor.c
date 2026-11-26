@@ -101,7 +101,7 @@ int main(int argc, char *argv[])
             total += written;
         }
 
-        sleep(1);
+        sleep(12);
     }
 
     return 0;

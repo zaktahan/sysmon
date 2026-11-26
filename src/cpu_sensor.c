@@ -87,7 +87,7 @@ int main(void)
             total += written;
         }
 
-        sleep(1);
+        sleep(17);
     }
 
     close(fd);

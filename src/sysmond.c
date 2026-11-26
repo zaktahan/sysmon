@@ -1,4 +1,4 @@
-
+#include <pthread.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <errno.h>
@@ -11,10 +11,119 @@
 
 volatile sig_atomic_t stop = 0;
 
+// Shared data
+MemData mem_data = {0};
+CpuData cpu_data = {0};
+ProcData proc_data = {0};
+
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+
 void handler(int sig)
 {
     (void)sig;
     stop = 1;
+}
+
+void printall(void)
+{
+    printf("\n===== MEMORY =====\n");
+    printf("Total: %ld kB\n", mem_data.mem_total);
+    printf("Available: %ld kB\n", mem_data.mem_avail);
+    printf("Free: %ld kB\n", mem_data.mem_free);
+    printf("Swap Total: %ld kB\n", mem_data.swap_total);
+    printf("Swap Free: %ld kB\n", mem_data.swap_free);
+
+    printf("\n===== CPU =====\n");
+    printf("Load 1: %f\n", cpu_data.load1);
+    printf("Load 5: %f\n", cpu_data.load5);
+    printf("Load 15: %f\n", cpu_data.load15);
+
+    printf("\n===== PROCESSES =====\n");
+    printf("Total Processes: %d\n", proc_data.total_procs);
+}
+
+// Memory thread
+void *mem_thread(void *arg)
+{
+    int fd = *(int *)arg;
+    MemData temp_data;
+
+    while (1)
+    {
+        if (read(fd, &temp_data, sizeof(temp_data))
+            != sizeof(temp_data))
+        {
+            break;
+        }
+
+        pthread_mutex_lock(&mutex);
+
+        mem_data = temp_data;
+        printf("\nMEM updated\n");
+        printall();
+
+        pthread_mutex_unlock(&mutex);
+    }
+
+    kill(getpid(), SIGTERM);
+
+    return NULL;
+}
+
+// CPU thread
+void *cpu_thread(void *arg)
+{
+    int fd = *(int *)arg;
+    CpuData temp_data;
+
+    while (1)
+    {
+        if (read(fd, &temp_data, sizeof(temp_data))
+            != sizeof(temp_data))
+        {
+            break;
+        }
+
+        pthread_mutex_lock(&mutex);
+
+        cpu_data = temp_data;
+        printf("\nCPU updated\n");
+        printall();
+
+        pthread_mutex_unlock(&mutex);
+    }
+
+    kill(getpid(), SIGTERM);
+
+    return NULL;
+}
+
+// Process thread
+void *proc_thread(void *arg)
+{
+    int fd = *(int *)arg;
+    ProcData temp_data;
+
+    while (1)
+    {
+        if (read(fd, &temp_data, sizeof(temp_data))
+            != sizeof(temp_data))
+        {
+            break;
+        }
+
+        pthread_mutex_lock(&mutex);
+
+        proc_data = temp_data;
+        printf("\nPROC updated\n");
+        printall();
+
+        pthread_mutex_unlock(&mutex);
+    }
+
+    kill(getpid(), SIGTERM);
+
+    return NULL;
 }
 
 int main(void)
@@ -134,64 +243,77 @@ int main(void)
         return 1;
     }
 
-    MemData mem_data;
-    CpuData cpu_data;
-    ProcData proc_data;
+    // Block signals before creating threads
+    sigset_t mask;
+    sigset_t oldmask;
 
-    while (!stop)
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGINT);
+    sigaddset(&mask, SIGTERM);
+
+    pthread_t tid1;
+    pthread_t tid2;
+    pthread_t tid3;
+
+    int created = 0;
+    int ret = 0;
+
+    if (pthread_sigmask(SIG_BLOCK, &mask, &oldmask) == 0)
     {
-        if (read(pipefd[0], &mem_data, sizeof(mem_data)) != sizeof(mem_data))
+        // Create memory thread
+        if (pthread_create(&tid1, NULL,
+                           mem_thread, &pipefd[0]) == 0)
         {
-            if (!stop)
-                fprintf(stderr, "Failed to read memory data\n");
-            break;
+            created++;
         }
 
-        if (stop)
-            break;
-
-        if (read(cpu_fd, &cpu_data, sizeof(cpu_data)) != sizeof(cpu_data))
+        // Create CPU thread
+        if (created == 1 &&
+            pthread_create(&tid2, NULL,
+                           cpu_thread, &cpu_fd) == 0)
         {
-            if (!stop)
-                fprintf(stderr, "Failed to read CPU data\n");
-            break;
+            created++;
         }
 
-        if (stop)
-            break;
-
-        if (read(proc_fd, &proc_data, sizeof(proc_data)) != sizeof(proc_data))
+        // Create process thread
+        if (created == 2 &&
+            pthread_create(&tid3, NULL,
+                           proc_thread, &proc_fd) == 0)
         {
-            if (!stop)
-                fprintf(stderr, "Failed to read process data\n");
-            break;
+            created++;
         }
-
-        if (stop)
-            break;
-
-        printf("\n===== MEMORY =====\n");
-        printf("Total: %ld kB\n", mem_data.mem_total);
-        printf("Available: %ld kB\n", mem_data.mem_avail);
-        printf("Free: %ld kB\n", mem_data.mem_free);
-        printf("Swap Total: %ld kB\n", mem_data.swap_total);
-        printf("Swap Free: %ld kB\n", mem_data.swap_free);
-
-        printf("\n===== CPU =====\n");
-        printf("Load 1: %f\n", cpu_data.load1);
-        printf("Load 5: %f\n", cpu_data.load5);
-        printf("Load 15: %f\n", cpu_data.load15);
-
-        printf("\n===== PROCESSES =====\n");
-        printf("Total Processes: %d\n", proc_data.total_procs);
-
-        sleep(1);
     }
 
+    if (created == 3)
+    {
+        // Wait for a termination signal
+        while (!stop)
+        {
+            sigsuspend(&oldmask);
+        }
+    }
+    else
+    {
+        fprintf(stderr, "Thread setup failed\n");
+        ret = 1;
+    }
+
+    // Stop sensors
     kill(pid1, SIGTERM);
     kill(pid2, SIGTERM);
     kill(pid3, SIGTERM);
 
+    // Wait for threads
+    if (created >= 1)
+        pthread_join(tid1, NULL);
+
+    if (created >= 2)
+        pthread_join(tid2, NULL);
+
+    if (created >= 3)
+        pthread_join(tid3, NULL);
+
+    // Reap child processes
     waitpid(pid1, NULL, 0);
     waitpid(pid2, NULL, 0);
     waitpid(pid3, NULL, 0);
@@ -203,7 +325,9 @@ int main(void)
     unlink(CPU_FIFO_PATH);
     unlink(PROC_FIFO_PATH);
 
-    printf("\nSysmon stopped successfully\n");
+    pthread_mutex_destroy(&mutex);
 
-    return 0;
+    printf("\nSysmon stopped\n");
+
+    return ret;
 }
